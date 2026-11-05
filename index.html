@@ -796,8 +796,11 @@
   var aboutText = $("aboutText");
   var shortcutsText = $("shortcutsText");
 
-  var HIGHLIGHT_LIMIT = 2500000;    /* これより大きい入力は色付けを簡略化 */
-  var HIGHLIGHT_MAX_MARKS = 40000;  /* 削除箇所が多すぎる場合も簡略化 */
+  var FAST_RENDER_LIMIT = 4000000;  /* これ以下は一括描画 */
+  var BLOCK_LINES = 400;            /* DOM 間引きのブロック単位（行数） */
+  var PRUNE_MIN_BLOCKS = 8;         /* ブロックがこれ未満の小さい入力は間引きしない */
+  var HARD_LIMIT_CHARS = 20000000;  /* これを超える入力は色付けを省略 */
+  var HARD_LIMIT_MARKS = 500000;    /* 削除箇所が多すぎる場合も省略 */
   var fileName = "";
   var debounceTimer = 0;
   var copyTimer = 0;
@@ -805,6 +808,11 @@
   var lastText = "";
   var lastRes = null;
   var highlightSkipped = false;
+  var renderToken = 0;
+  var scrollScheduled = false;
+  var blockHtmls = [];
+  var blocks = [];
+  var prune = { active: false, offsets: [], startLines: [], padTop: 0, from: -1, to: -1 };
   var state = { lang: "ja", theme: "dark" };
 
   /* ============ PURE-LOGIC-START ============ */
@@ -1088,8 +1096,14 @@
   /* ---------- core render ---------- */
 
   function renderBackdrop(text, ranges, headerRange) {
+    renderToken++;
+    var token = renderToken;
+
+    blocks = [];
+    prune.active = false;
+
     if (!text) { backdrop.textContent = ""; highlightSkipped = false; return; }
-    if (text.length > HIGHLIGHT_LIMIT || ranges.length > HIGHLIGHT_MAX_MARKS) {
+    if (text.length > HARD_LIMIT_CHARS || ranges.length > HARD_LIMIT_MARKS) {
       backdrop.textContent = text;
       highlightSkipped = true;
       return;
@@ -1103,18 +1117,148 @@
     }
     marks.sort(function (a, b) { return a.s - b.s; });
 
-    var parts = [];
+    /* 行頭を BLOCK_LINES 行ごとに区切り位置として覚えておく（DOM 間引きの単位） */
+    var starts = computeLineStarts(text);
+    var boundaries = [];
+    for (var l = BLOCK_LINES; l < starts.length; l += BLOCK_LINES) boundaries.push(starts[l]);
+
+    var htmls = [];
+    var startLines = [];
+    var cur = [];
+    var bp = 0;
     var cursor = 0;
+    var blockStart = 0;
+
+    function flushBlock() {
+      if (cur.length) {
+        htmls.push(cur.join(""));
+        startLines.push(lineOf(starts, blockStart));
+        cur = [];
+      }
+    }
+    function emitPlain(from, to) {
+      while (bp < boundaries.length && boundaries[bp] < to) {
+        var b = boundaries[bp++];
+        if (b > from) {
+          cur.push(escapeHtml(text.slice(from, b)));
+          flushBlock();
+          from = b;
+          blockStart = b;
+        }
+      }
+      if (to > from) cur.push(escapeHtml(text.slice(from, to)));
+    }
+
     for (var m = 0; m < marks.length; m++) {
       var mk = marks[m];
       if (mk.s < cursor || mk.e <= mk.s) continue;
-      parts.push(escapeHtml(text.slice(cursor, mk.s)));
-      parts.push('<span class="' + mk.cls + '" data-p="' + mk.dp + '">' + escapeHtml(text.slice(mk.s, mk.e)) + "</span>");
+      emitPlain(cursor, mk.s);
+      /* スパンの途中ではブロックを切らない（境界はスパンの後ろへ送る） */
+      while (bp < boundaries.length && boundaries[bp] < mk.e) bp++;
+      cur.push('<span class="' + mk.cls + '" data-p="' + mk.dp + '">' + escapeHtml(text.slice(mk.s, mk.e)) + "</span>");
       cursor = mk.e;
     }
-    parts.push(escapeHtml(text.slice(cursor)));
-    if (text.endsWith("\n")) parts.push(" ");
-    backdrop.innerHTML = parts.join("");
+    emitPlain(cursor, text.length);
+    if (text.endsWith("\n")) cur.push(" ");
+    flushBlock();
+
+    blockHtmls = htmls;
+    prune.startLines = startLines;
+
+    if (text.length <= FAST_RENDER_LIMIT || htmls.length <= 1) {
+      var all = [];
+      for (var h = 0; h < htmls.length; h++) all.push('<div class="blk">' + htmls[h] + "</div>");
+      backdrop.innerHTML = all.join("");
+      var els = backdrop.children;
+      for (var e = 0; e < els.length; e++) blocks.push({ el: els[e], h: 0, pruned: false });
+      finishBlocks();
+      return;
+    }
+
+    /* 大きい入力はフレームごとにブロック単位で追加していく（途中で編集されたら中断） */
+    backdrop.textContent = "";
+    var idx = 0;
+    function step() {
+      if (token !== renderToken) return;
+      var budget = 150000;
+      while (idx < blockHtmls.length && budget > 0) {
+        var el = document.createElement("div");
+        el.className = "blk";
+        el.innerHTML = blockHtmls[idx];
+        backdrop.appendChild(el);
+        blocks.push({ el: el, h: 0, pruned: false });
+        budget -= blockHtmls[idx].length;
+        idx++;
+      }
+      backdrop.scrollTop = input.scrollTop;
+      backdrop.scrollLeft = input.scrollLeft;
+      if (idx < blockHtmls.length) requestAnimationFrame(step);
+      else finishBlocks();
+    }
+    step();
+  }
+
+  /* 全ブロックの高さを実測し、以降は表示範囲外のブロックを間引く */
+  function finishBlocks() {
+    if (!blocks.length) { prune.active = false; return; }
+    var offs = [];
+    var sum = 0;
+    for (var i = 0; i < blocks.length; i++) {
+      offs.push(sum);
+      blocks[i].h = blocks[i].el.offsetHeight;
+      sum += blocks[i].h;
+    }
+    prune.offsets = offs;
+    prune.padTop = parseFloat(getComputedStyle(backdrop).paddingTop) || 0;
+    prune.active = blocks.length >= PRUNE_MIN_BLOCKS;
+    prune.from = -1;
+    prune.to = -1;
+    updatePrune(true);
+  }
+
+  function updatePrune(force) {
+    if (!prune.active || !blocks.length) return;
+    var visTop = input.scrollTop;
+    var visBottom = visTop + input.clientHeight;
+    var offs = prune.offsets;
+    var pad = prune.padTop;
+
+    /* 表示範囲にかかるブロックを二分探索で特定する */
+    var a = 0, b = blocks.length - 1, mid;
+    while (a < b) {
+      mid = (a + b + 1) >> 1;
+      if (pad + offs[mid] <= visTop) a = mid; else b = mid - 1;
+    }
+    var lo = a;
+    a = 0; b = blocks.length - 1;
+    while (a < b) {
+      mid = (a + b) >> 1;
+      if (pad + offs[mid] + blocks[mid].h < visBottom) a = mid + 1; else b = mid;
+    }
+    var hi = a;
+
+    var from = Math.max(0, lo - 1);
+    var to = Math.min(blocks.length - 1, hi + 1);
+    if (!force && from === prune.from && to === prune.to) return;
+    prune.from = from;
+    prune.to = to;
+
+    for (var i = 0; i < blocks.length; i++) {
+      var bl = blocks[i];
+      if (i >= from && i <= to) {
+        if (bl.pruned) {
+          bl.el.innerHTML = blockHtmls[i];
+          bl.el.style.height = "";
+          bl.el.removeAttribute("data-pruned");
+          bl.pruned = false;
+        }
+      } else if (!bl.pruned) {
+        bl.el.style.height = bl.h + "px";
+        bl.el.innerHTML = "";
+        bl.el.setAttribute("data-pruned", "1");
+        bl.pruned = true;
+      }
+    }
   }
 
   function updateStats(src, res) {
@@ -1171,6 +1315,7 @@
   function syncScrollUI() {
     syncBackdropScroll();
     updateThumb();
+    updatePrune(false);
   }
 
   /* ---------- custom scroll rail ---------- */
@@ -1255,20 +1400,69 @@
     railMarks.appendChild(frag);
   }
 
+  function blockIndexForLine(lineIdx) {
+    var sl = prune.startLines;
+    if (!sl || !sl.length) return -1;
+    var a = 0, b = sl.length - 1, mid;
+    while (a < b) {
+      mid = (a + b + 1) >> 1;
+      if (sl[mid] <= lineIdx) a = mid; else b = mid - 1;
+    }
+    return a;
+  }
+
+  function materializeBlock(b) {
+    if (!prune.active || b < 0 || !blocks[b]) return;
+    var bl = blocks[b];
+    if (bl.pruned) {
+      bl.el.innerHTML = blockHtmls[b];
+      bl.el.style.height = "";
+      bl.el.removeAttribute("data-pruned");
+      bl.pruned = false;
+    }
+  }
+
   function jumpTo(item) {
-    input.focus();
     var pos = item.pos || 0;
+    try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); }
     try { input.setSelectionRange(pos, pos); } catch (e) {}
+
+    /* 対象が属するブロックを先に展開し、要素の実測位置へスクロールする */
+    var lineIdx = lineOf(computeLineStarts(lastText), pos);
+    var b = blockIndexForLine(lineIdx);
+    materializeBlock(b);
+
+    var el = backdrop.querySelector('[data-p="' + item.dp + '"]');
+    if (!el && b >= 0 && blocks[b]) el = blocks[b].el;
+    if (!el) return;
+
+    var y = el.getBoundingClientRect().top - backdrop.getBoundingClientRect().top + input.scrollTop;
+    var target = Math.max(0, y - input.clientHeight * 0.3);
+    input.scrollTop = target;
+    syncScrollUI();
+    flashMark(item.dp);
+
+    /* レイアウト確定後にもう一度だけ位置を合わせる */
     requestAnimationFrame(function () {
-      input.scrollTop = Math.max(0, input.scrollTop - input.clientHeight * 0.35);
+      if (Math.abs(input.scrollTop - target) > 4) input.scrollTop = target;
       syncScrollUI();
     });
-    flashMark(item.dp);
   }
 
   function flashMark(dp) {
     var el = backdrop.querySelector('[data-p="' + dp + '"]');
-    if (!el) return;
+    if (!el) {
+      /* 分割描画中で、まだその位置が描かれていない場合があるため一度だけ再挑戦する */
+      setTimeout(function () {
+        var el2 = backdrop.querySelector('[data-p="' + dp + '"]');
+        if (el2) applyFlash(el2);
+      }, 400);
+      return;
+    }
+    applyFlash(el);
+  }
+
+  function applyFlash(el) {
     el.classList.add("flash");
     clearTimeout(flashTimer);
     flashTimer = setTimeout(function () {
@@ -1486,7 +1680,12 @@
   input.addEventListener("input", schedule);
 
   input.addEventListener("scroll", function () {
-    syncScrollUI();
+    if (scrollScheduled) return;
+    scrollScheduled = true;
+    requestAnimationFrame(function () {
+      scrollScheduled = false;
+      syncScrollUI();
+    });
   }, { passive: true });
 
   input.addEventListener("keydown", function (e) {
@@ -1531,9 +1730,18 @@
   langJaBtn.addEventListener("click", function () { applyLang("ja"); });
   langEnBtn.addEventListener("click", function () { applyLang("en"); });
 
+  var resizeTimer = 0;
   window.addEventListener("resize", function () {
-    if (lastRes) renderRail(lastText, lastRes);
-    updateThumb();
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      if (prune.active) {
+        /* ブロックの高さは幅に依存するため、幅が変わったら作り直す */
+        run();
+      } else {
+        if (lastRes) renderRail(lastText, lastRes);
+        updateThumb();
+      }
+    }, 250);
   });
 
   window.addEventListener("dragover", function (e) {
