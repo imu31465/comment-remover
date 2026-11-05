@@ -39,12 +39,16 @@ const mine = new Function(
 )();
 
 /* ---------- 2. 旧拡張の removeComments を取り出す ---------- */
-const extPath =
-  process.argv[2] ||
-  "C:\\Users\\favma\\.vscode\\extensions\\undefined_publisher.comment-remover-0.1.3\\extension.js";
-if (!fs.existsSync(extPath)) {
-  console.log("SKIP: 元の extension.js が見つかりません: " + extPath);
-  console.log("      パスを引数で指定してください。");
+const candidates = process.argv[2]
+  ? [process.argv[2]]
+  : [
+      path.join(root, "extension", "extension.js"),
+      "C:\\Users\\favma\\.vscode\\extensions\\undefined_publisher.comment-remover-0.1.3\\extension.js",
+    ];
+const extPath = candidates.find(function (p) { return fs.existsSync(p); });
+if (!extPath) {
+  console.log("SKIP: 元の extension.js が見つかりません。");
+  console.log("      パスを指定してください: node test/parity.test.mjs <extension.js>");
   process.exit(0);
 }
 const extSrc = fs.readFileSync(extPath, "utf8");
