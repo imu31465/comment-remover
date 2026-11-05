@@ -3,6 +3,8 @@
 JavaScript / UserScript からコメントだけを削除する、ブラウザだけで動くツールです。
 VS Code 拡張 `comment-remover v0.1.3` の解析ロジックをそのまま移植しています。
 
+**公開URL: https://imu31465.github.io/comment-remover/**
+
 ## 開き方
 
 `index.html` をダブルクリックするだけです。サーバーもビルドも不要で、
