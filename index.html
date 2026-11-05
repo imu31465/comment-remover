@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="JavaScript / UserScript からコメントだけを削除する、ブラウザだけで動くツール。==UserScript== ヘッダーは保護します。">
+<title>comment-remover — コメントは消す。ヘッダーは残す。</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%23131110'/%3E%3Ctext%20x='7'%20y='23'%20font-family='Georgia,serif'%20font-size='20'%20fill='%23ECE5D7'%3Ec%3C/text%3E%3Cpath%20d='M4%2017h24'%20stroke='%23E4573D'%20stroke-width='3'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --ink: #131110;
+    --panel: #1C1A16;
+    --panel-2: #171511;
+    --line: #2E2A23;
+    --line-soft: #252119;
+    --text: #ECE5D7;
+    --muted: #9A8F7E;
+    --muted-2: #6F6659;
+    --red: #E4573D;
+    --red-soft: rgba(228, 87, 61, 0.14);
+    --red-line: rgba(228, 87, 61, 0.55);
+    --kraft: #D9A441;
+    --kraft-soft: rgba(217, 164, 65, 0.13);
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, P052, Georgia, "Times New Roman", serif;
+    --mincho: "Yu Mincho", "YuMincho", "Hiragino Mincho ProN", "Noto Serif JP", serif;
+    --sans: "Segoe UI", "Yu Gothic UI", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif;
+    --mono: "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", "Roboto Mono", Menlo, ui-monospace, monospace;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    background-color: var(--ink);
+    background-image:
+      radial-gradient(1100px 520px at 78% -12%, rgba(217, 164, 65, 0.05), transparent 62%),
+      radial-gradient(900px 480px at 6% 108%, rgba(228, 87, 61, 0.045), transparent 58%);
+    background-repeat: no-repeat;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.65;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  body::before {
+    content: "";
+    display: block;
+    height: 3px;
+    background: var(--red);
+    flex: none;
+  }
+
+  .skip {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    background: var(--panel);
+    color: var(--text);
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .skip:focus { left: 16px; top: 16px; }
+
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    margin: -1px; padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead {
+    max-width: 1280px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 42px 28px 22px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .wordmark {
+    margin: 0;
+    font-family: var(--serif);
+    font-weight: 700;
+    font-size: clamp(34px, 4.6vw, 54px);
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .struck { position: relative; }
+
+  .struck::after {
+    content: "";
+    position: absolute;
+    left: -0.05em;
+    right: -0.05em;
+    top: 0.5em;
+    height: 0.07em;
+    background: var(--red);
+    border-radius: 999px;
+    transform-origin: left center;
+    transform: rotate(-1.1deg);
+    animation: strike-in 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) 0.2s both;
+  }
+
+  @keyframes strike-in {
+    from { transform: rotate(-1.1deg) scaleX(0); }
+    to   { transform: rotate(-1.1deg) scaleX(1); }
+  }
+
+  .tagline {
+    margin: 12px 0 0;
+    font-family: var(--mincho);
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+
+  .meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    flex: none;
+  }
+
+  .stamp {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    border: 1px dashed var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    white-space: nowrap;
+  }
+
+  .local {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--muted-2);
+    white-space: nowrap;
+  }
+
+  .local::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--kraft);
+    box-shadow: 0 0 0 3px var(--kraft-soft);
+    flex: none;
+  }
+
+  /* ---------- control bar ---------- */
+
+  .controlbar {
+    max-width: 1280px;
+    width: 100%;
+    margin: 18px auto 0;
+    padding: 0 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .controls, .options {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .options { gap: 18px; }
+
+  .btn {
+    appearance: none;
+    font-family: var(--sans);
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 16px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, transform 0.06s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    user-select: none;
+  }
+
+  .btn:hover { border-color: var(--muted-2); }
+  .btn:active { transform: translateY(1px); }
+  .btn:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+  .btn-primary {
+    background: var(--red);
+    border-color: var(--red);
+    color: #1A0F0B;
+    padding: 9px 24px;
+  }
+  .btn-primary:hover { border-color: var(--red); background: #EA6248; }
+
+  .btn-ghost { color: var(--muted); }
+  .btn-ghost:hover { color: var(--text); }
+
+  .btn-small { padding: 6px 12px; font-size: 12.5px; }
+
+  .btn-file input { display: none; }
+
+  .switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .switch:hover { color: var(--text); }
+  .switch input {
+    accent-color: var(--red);
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    margin: 0;
+  }
+
+  /* ---------- panes ---------- */
+
+  .panes {
+    max-width: 1280px;
+    width: 100%;
+    margin: 16px auto 0;
+    padding: 0 28px;
+    display: grid;
+    grid-template-columns: minmax(0, 1.06fr) minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 400px;
+    height: min(66vh, 760px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .pane-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    flex: none;
+  }
+
+  .pane-head h2 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+    font-family: var(--sans);
+  }
+
+  .pane-actions { display: flex; gap: 8px; }
+
+  .legend {
+    margin: 0;
+    display: flex;
+    gap: 14px;
+    font-size: 11.5px;
+    color: var(--muted-2);
+    white-space: nowrap;
+  }
+
+  .key { display: inline-flex; align-items: center; gap: 6px; }
+
+  .key::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    flex: none;
+  }
+
+  .key-del::before {
+    background:
+      linear-gradient(to bottom, transparent 44%, var(--red) 44%, var(--red) 56%, transparent 56%),
+      var(--red-soft);
+    border: 1px solid var(--red-line);
+  }
+
+  .key-keep::before {
+    background: var(--kraft-soft);
+    box-shadow: inset 0 -2px 0 var(--kraft);
+  }
+
+  .editor {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: var(--panel);
+  }
+
+  .editor:focus-within { box-shadow: inset 0 0 0 1px var(--muted-2); }
+
+  .editor textarea,
+  .editor .backdrop {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    border: 0;
+    padding: 16px 18px;
+    font-family: var(--mono);
+    font-size: 12.8px;
+    line-height: 1.68;
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+    white-space: pre-wrap;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    tab-size: 4;
+    -moz-tab-size: 4;
+  }
+
+  .editor .backdrop {
+    overflow: hidden;
+    color: var(--text);
+    pointer-events: none;
+  }
+
+  .editor textarea {
+    width: 100%;
+    height: 100%;
+    resize: none;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--text);
+    outline: none;
+    overflow: auto;
+  }
+
+  .editor textarea::placeholder { color: var(--muted-2); }
+
+  .editor textarea::selection { background: rgba(228, 87, 61, 0.26); }
+
+  /* スクロールバー: 暗く静かに */
+  .editor textarea {
+    scrollbar-width: thin;
+    scrollbar-color: #3A342B transparent;
+  }
+  .editor textarea::-webkit-scrollbar { width: 12px; height: 12px; }
+  .editor textarea::-webkit-scrollbar-track { background: transparent; }
+  .editor textarea::-webkit-scrollbar-thumb {
+    background: #3A342B;
+    background-clip: padding-box;
+    border: 3px solid transparent;
+    border-radius: 999px;
+  }
+  .editor textarea::-webkit-scrollbar-thumb:hover { background-color: #4C4437; }
+  .editor textarea::-webkit-scrollbar-corner { background: transparent; }
+
+  /* during IME composition, show the real text so it is never invisible */
+  .editor.is-composing .backdrop { visibility: hidden; }
+  .editor.is-composing textarea { color: var(--text); background: var(--panel); }
+
+  /* redaction marks inside the backdrop */
+  .gone {
+    color: var(--muted-2);
+    background: var(--red-soft);
+    text-decoration: line-through;
+    text-decoration-color: var(--red);
+    text-decoration-thickness: 1px;
+  }
+
+  .keep {
+    background: var(--kraft-soft);
+    text-decoration: underline;
+    text-decoration-color: var(--kraft);
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 3px;
+  }
+
+  /* the output pane is a plain readable textarea (no overlay) */
+  .editor-out textarea {
+    position: absolute;
+    color: var(--text);
+    background: var(--panel);
+  }
+
+  .pane-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 36px;
+    padding: 7px 14px;
+    border-top: 1px solid var(--line);
+    background: var(--panel-2);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted-2);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+  }
+
+  /* ---------- colophon ---------- */
+
+  .colophon {
+    max-width: 1280px;
+    width: 100%;
+    margin: 24px auto 44px;
+    padding: 0 28px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    color: var(--muted-2);
+    font-size: 12.5px;
+  }
+
+  .colophon p { margin: 0; }
+  .colophon code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  kbd {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+
+  .shortcuts { white-space: nowrap; }
+
+  /* ---------- drag & drop ---------- */
+
+  body.dragging::after {
+    content: "ドロップして読み込む";
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: grid;
+    place-items: center;
+    background: rgba(19, 17, 16, 0.82);
+    color: var(--text);
+    font-size: 17px;
+    letter-spacing: 0.1em;
+    border: 3px dashed var(--kraft);
+    pointer-events: none;
+  }
+
+  /* ---------- responsive ---------- */
+
+  @media (max-width: 940px) {
+    .masthead { flex-direction: column; align-items: flex-start; gap: 16px; }
+    .meta { flex-direction: row; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .panes { grid-template-columns: minmax(0, 1fr); }
+    .pane { height: 46vh; min-height: 340px; }
+    .colophon { flex-direction: column; align-items: flex-start; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .struck::after { animation: none; }
+    .btn { transition: none; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">コンテンツへスキップ</a>
+
+<header class="masthead">
+  <div class="brand">
+    <h1 class="wordmark"><span class="struck">comment</span>-remover</h1>
+    <p class="tagline">コメントは消す。ヘッダーは残す。</p>
+  </div>
+  <div class="meta">
+    <span class="stamp">v0.1.3 · web edition</span>
+    <span class="local">すべてローカル処理・外部送信なし</span>
+  </div>
+</header>
+
+<section class="controlbar" aria-label="操作">
+  <div class="controls">
+    <button id="runBtn" class="btn btn-primary" type="button">変換</button>
+    <button id="sampleBtn" class="btn" type="button">サンプル</button>
+    <label class="btn btn-file">ファイルを開く<input id="fileInput" type="file" accept=".js,.mjs,.cjs,.txt,text/javascript,application/javascript,text/plain" hidden></label>
+    <button id="clearBtn" class="btn btn-ghost" type="button">クリア</button>
+  </div>
+  <div class="options">
+    <label class="switch"><input id="optHeader" type="checkbox" checked> UserScriptヘッダーを保護</label>
+    <label class="switch"><input id="optAuto" type="checkbox" checked> 自動変換</label>
+  </div>
+</section>
+
+<main id="main" class="panes">
+  <section class="pane" aria-labelledby="inLabel">
+    <div class="pane-head">
+      <h2 id="inLabel">貼り付け</h2>
+      <p class="legend">
+        <span class="key key-del">削除されるコメント</span>
+        <span class="key key-keep">保護されるヘッダー</span>
+      </p>
+    </div>
+    <div class="editor" id="inputEditor">
+      <pre class="backdrop" id="backdrop" aria-hidden="true"></pre>
+      <textarea id="input" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="変換するコード" placeholder="ここに JavaScript / UserScript を貼り付け"></textarea>
+    </div>
+    <div class="pane-foot">
+      <span class="stat" id="inStat">—</span>
+    </div>
+  </section>
+
+  <section class="pane" aria-labelledby="outLabel">
+    <div class="pane-head">
+      <h2 id="outLabel">結果</h2>
+      <div class="pane-actions">
+        <button id="copyBtn" class="btn btn-small" type="button">コピー</button>
+        <button id="dlBtn" class="btn btn-small" type="button">保存</button>
+      </div>
+    </div>
+    <div class="editor editor-out">
+      <textarea id="output" readonly spellcheck="false" aria-label="変換結果" placeholder="結果がここに表示されます"></textarea>
+    </div>
+    <div class="pane-foot">
+      <span class="stat" id="outStat">—</span>
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+  <p class="about">ベースは VS Code 拡張 <code>comment-remover v0.1.3</code>。文字列・正規表現・テンプレートリテラルを壊さず、<code>// ==/UserScript==</code> ヘッダーだけを残してコメントを削除します。</p>
+  <p class="shortcuts"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 変換 ／ <kbd>Ctrl</kbd>+<kbd>S</kbd> 保存</p>
+</footer>
+
+<div id="live" class="sr-only" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- refs ---------- */
+  var $ = function (id) { return document.getElementById(id); };
+  var input = $("input");
+  var output = $("output");
+  var backdrop = $("backdrop");
+  var inputEditor = $("inputEditor");
+  var inStat = $("inStat");
+  var outStat = $("outStat");
+  var optHeader = $("optHeader");
+  var optAuto = $("optAuto");
+  var runBtn = $("runBtn");
+  var sampleBtn = $("sampleBtn");
+  var clearBtn = $("clearBtn");
+  var copyBtn = $("copyBtn");
+  var dlBtn = $("dlBtn");
+  var fileInput = $("fileInput");
+  var live = $("live");
+
+  var BACKDROP_LIMIT = 300000;
+  var fileName = "";
+  var debounceTimer = 0;
+  var copyTimer = 0;
+
+  /* ============ PURE-LOGIC-START ============ */
+
+  /*
+   * コメントを削除したテキストと、削除された範囲の一覧を返す。
+   * VS Code 拡張 comment-remover v0.1.3 の removeComments() と同じ走査ロジックで、
+   * 文字列・テンプレートリテラル・正規表現リテラルをコメントと誤認しない。
+   * ranges は「元のテキスト」上の [start, end) 半開区間。
+   */
+  function removeCommentsRanges(code) {
+    var ranges = [];
+    var result = "";
+    var i = 0;
+    var len = code.length;
+    var lastSignificant = "";
+    while (i < len) {
+      if (code[i] === '"') {
+        var j = i + 1;
+        while (j < len && code[j] !== '"') {
+          if (code[j] === "\\") j++;
+          j++;
+        }
+        result += code.slice(i, j + 1);
+        lastSignificant = "string";
+        i = j + 1;
+      } else if (code[i] === "'") {
+        var j = i + 1;
+        while (j < len && code[j] !== "'") {
+          if (code[j] === "\\") j++;
+          j++;
+        }
+        result += code.slice(i, j + 1);
+        lastSignificant = "string";
+        i = j + 1;
+      } else if (code[i] === "\u0060") {
+        var j = i + 1;
+        var depth = 0;
+        while (j < len) {
+          if (code[j] === "\\") { j += 2; continue; }
+          if (code[j] === "$" && code[j + 1] === "{") { depth++; j += 2; continue; }
+          if (depth > 0 && code[j] === "}") { depth--; j++; continue; }
+          if (depth === 0 && code[j] === "\u0060") break;
+          j++;
+        }
+        result += code.slice(i, j + 1);
+        lastSignificant = "string";
+        i = j + 1;
+      } else if (code[i] === "/" && code[i + 1] === "*") {
+        var j = i + 2;
+        while (j < len - 1 && !(code[j] === "*" && code[j + 1] === "/")) {
+          j++;
+        }
+        ranges.push([i, Math.min(j + 2, len)]);
+        i = j + 2;
+      } else if (
+        code[i] === "/" && code[i + 1] === "/" &&
+        !(i > 0 && (code[i - 1] === ":" || code[i - 1] === "/"))
+      ) {
+        var j = i;
+        while (j < len && code[j] !== "\n") {
+          j++;
+        }
+        ranges.push([i, j]);
+        i = j;
+      } else if (
+        code[i] === "/" &&
+        /[=(,!&|?:;{}\[~^]/.test(lastSignificant)
+      ) {
+        var j = i + 1;
+        var inClass = false;
+        while (j < len && (code[j] !== "/" || inClass)) {
+          if (code[j] === "\\") { j++; }
+          else if (code[j] === "[") { inClass = true; }
+          else if (code[j] === "]") { inClass = false; }
+          j++;
+        }
+        j++;
+        while (j < len && /[gimsuy]/.test(code[j])) j++;
+        result += code.slice(i, j);
+        lastSignificant = "regex";
+        i = j;
+      } else {
+        var ch = code[i];
+        result += ch;
+        if (!/\s/.test(ch)) lastSignificant = ch;
+        i++;
+      }
+    }
+    return { text: result, ranges: ranges };
+  }
+
+  /*
+   * 本体。keepHeader が true なら // ==/UserScript== 行までをヘッダーとして保護し、
+   * 残りだけをコメント削除する（拡張本体と同じ流れ）。
+   * 返り値の ranges / headerRange は元テキスト上の座標。
+   */
+  function analyze(fullText, keepHeader) {
+    var headerText = "";
+    var bodyText = fullText;
+    var headerEnd = -1;
+    if (keepHeader) {
+      var headerEndMarker = "// ==/" + "UserScript==";
+      var headerRegex = new RegExp("^" + headerEndMarker + "\\s*[\\r\\n]", "m");
+      var match = fullText.match(headerRegex);
+      if (match) {
+        headerEnd = match.index + match[0].length;
+        headerText = fullText.substring(0, headerEnd);
+        bodyText = fullText.substring(headerEnd);
+      }
+    }
+    var clean = removeCommentsRanges(bodyText);
+    var cleanBody = clean.text.replace(/^[ \t]*[\r\n]/gm, "");
+    if (headerText && !headerText.endsWith("\n")) headerText += "\n";
+    var offset = headerEnd >= 0 ? headerEnd : 0;
+    var ranges = clean.ranges.map(function (r) { return [r[0] + offset, r[1] + offset]; });
+    var headerRange = headerEnd >= 0 ? [0, headerEnd] : null;
+    return { text: headerText + cleanBody, ranges: ranges, headerRange: headerRange };
+  }
+
+  /* ============ PURE-LOGIC-END ============ */
+
+  var SAMPLE = [
+    "// ==UserScript==",
+    "// @name         sample-demo",
+    "// @namespace    local",
+    "// @version      1.0",
+    "// @match        https://example.com/*",
+    "// ==/UserScript==",
+    "",
+    "/* 設定 */",
+    "const CONFIG = {",
+    "  endpoint: \"https://api.example.com//v1\", // URL の // は壊さない",
+    "  pattern: /https?:\\/\\/example\\.com\\/\\w+/, // 正規表現もそのまま",
+    "};",
+    "",
+    "// テンプレートリテラルの中はコメントでも消さない",
+    "const banner = `// ${CONFIG.endpoint} /* demo */`;",
+    "",
+    "/* 複数行コメント",
+    "   ここも消える */",
+    "function greet(name) {",
+    "  const rate = 100 / 2; // 除算の / を正規表現と誤認しない",
+    "  return `Hello, ${name}! ${rate}`;",
+    "}",
+    "",
+    "console.log(greet(\"world\")); // 最後のコメント",
+    ""
+  ].join("\n");
+
+  /* ---------- helpers ---------- */
+
+  var fmt = function (n) { return n.toLocaleString("ja-JP"); };
+
+  var countLines = function (s) {
+    if (!s) return 0;
+    return s.split(/\r\n|\r|\n/).length;
+  };
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function notify(msg) {
+    live.textContent = msg;
+  }
+
+  /* ---------- core render ---------- */
+
+  function renderBackdrop(text, ranges, headerRange) {
+    if (!text) { backdrop.textContent = ""; return; }
+    if (text.length > BACKDROP_LIMIT) { backdrop.textContent = text; return; }
+
+    var marks = [];
+    if (headerRange) marks.push({ s: headerRange[0], e: headerRange[1], cls: "keep" });
+    for (var k = 0; k < ranges.length; k++) {
+      marks.push({ s: ranges[k][0], e: ranges[k][1], cls: "gone" });
+    }
+    marks.sort(function (a, b) { return a.s - b.s; });
+
+    var html = "";
+    var cursor = 0;
+    for (var m = 0; m < marks.length; m++) {
+      var mk = marks[m];
+      if (mk.s < cursor || mk.e <= mk.s) continue;
+      html += escapeHtml(text.slice(cursor, mk.s));
+      html += '<span class="' + mk.cls + '">' + escapeHtml(text.slice(mk.s, mk.e)) + "</span>";
+      cursor = mk.e;
+    }
+    html += escapeHtml(text.slice(cursor));
+    if (text.endsWith("\n")) html += " ";
+    backdrop.innerHTML = html;
+  }
+
+  function updateStats(src, res) {
+    if (!src) {
+      inStat.textContent = "—";
+      outStat.textContent = "—";
+      return;
+    }
+    inStat.textContent = fmt(src.length) + " 文字 · " + fmt(countLines(src)) + " 行";
+
+    var removedChars = 0;
+    for (var k = 0; k < res.ranges.length; k++) {
+      removedChars += res.ranges[k][1] - res.ranges[k][0];
+    }
+    var pct = Math.round((removedChars / src.length) * 100);
+    var line = fmt(res.text.length) + " 文字 · " + fmt(countLines(res.text)) + " 行";
+    if (res.ranges.length > 0) {
+      line += " ／ コメント " + fmt(res.ranges.length) + " 個・" + fmt(removedChars) + " 文字（" + pct + "%）を削除";
+    }
+    outStat.textContent = line;
+  }
+
+  function run() {
+    var text = input.value;
+    var res = analyze(text, optHeader.checked);
+    output.value = res.text;
+    renderBackdrop(text, res.ranges, res.headerRange);
+    updateStats(text, res);
+    backdrop.scrollTop = input.scrollTop;
+    backdrop.scrollLeft = input.scrollLeft;
+  }
+
+  function schedule() {
+    if (!optAuto.checked) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(run, 120);
+  }
+
+  /* ---------- actions ---------- */
+
+  function loadText(text, name) {
+    fileName = name || "";
+    input.value = text;
+    input.scrollTop = 0;
+    backdrop.scrollTop = 0;
+    run();
+    input.focus();
+  }
+
+  function loadFile(file) {
+    file.text().then(function (text) {
+      loadText(text, file.name || "");
+    }).catch(function () {
+      notify("ファイルを読み込めませんでした");
+    });
+  }
+
+  function copyResult() {
+    var text = output.value;
+    if (!text) { notify("コピーする結果がありません"); return; }
+    function done() {
+      notify("コピーしました");
+      copyBtn.textContent = "コピーしました";
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(function () { copyBtn.textContent = "コピー"; }, 1400);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () {
+        output.focus();
+        output.select();
+        try { document.execCommand("copy"); } catch (e) {}
+        done();
+      });
+    } else {
+      output.focus();
+      output.select();
+      try { document.execCommand("copy"); done(); } catch (e) { notify("コピーできませんでした"); }
+    }
+  }
+
+  function deriveName(name) {
+    if (!name) return "comment-removed.js";
+    var m = name.match(/^(.*?)(\.user)?\.js$/i);
+    if (m) return m[1] + ".cleaned" + (m[2] ? ".user" : "") + ".js";
+    var stem = name.replace(/\.[^.]+$/, "");
+    return (stem || "comment-removed") + ".cleaned.js";
+  }
+
+  function downloadResult() {
+    if (!output.value) { notify("保存する結果がありません"); return; }
+    var name = deriveName(fileName);
+    var blob = new Blob([output.value], { type: "text/javascript;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    notify("保存しました: " + name);
+  }
+
+  /* ---------- events ---------- */
+
+  input.addEventListener("input", schedule);
+
+  input.addEventListener("scroll", function () {
+    backdrop.scrollTop = input.scrollTop;
+    backdrop.scrollLeft = input.scrollLeft;
+  }, { passive: true });
+
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      var s = input.selectionStart;
+      var en = input.selectionEnd;
+      var v = input.value;
+      input.value = v.slice(0, s) + "  " + v.slice(en);
+      input.selectionStart = input.selectionEnd = s + 2;
+      run();
+    }
+  });
+
+  /* IME 入力中はオーバーレイを隠して、変換中の文字が見えるようにする */
+  input.addEventListener("compositionstart", function () {
+    inputEditor.classList.add("is-composing");
+  });
+  input.addEventListener("compositionend", function () {
+    inputEditor.classList.remove("is-composing");
+    run();
+  });
+
+  optHeader.addEventListener("change", run);
+  optAuto.addEventListener("change", function () { if (optAuto.checked) run(); });
+
+  runBtn.addEventListener("click", run);
+  sampleBtn.addEventListener("click", function () { loadText(SAMPLE, ""); });
+  clearBtn.addEventListener("click", function () { loadText("", ""); });
+
+  fileInput.addEventListener("change", function () {
+    var f = fileInput.files && fileInput.files[0];
+    if (f) loadFile(f);
+    fileInput.value = "";
+  });
+
+  copyBtn.addEventListener("click", copyResult);
+  dlBtn.addEventListener("click", downloadResult);
+
+  window.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    document.body.classList.add("dragging");
+  });
+  window.addEventListener("dragleave", function (e) {
+    if (e.relatedTarget === null) document.body.classList.remove("dragging");
+  });
+  window.addEventListener("drop", function (e) {
+    e.preventDefault();
+    document.body.classList.remove("dragging");
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) loadFile(f);
+  });
+
+  window.addEventListener("keydown", function (e) {
+    var mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key === "Enter") {
+      e.preventDefault();
+      run();
+    } else if (mod && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      downloadResult();
+    }
+  });
+
+  /* ---------- init ---------- */
+  run();
+})();
+</script>
+</body>
+</html>
