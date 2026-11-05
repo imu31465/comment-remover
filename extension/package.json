@@ -1,0 +1,32 @@
+{
+  "name": "comment-remover",
+  "displayName": "comment-remover",
+  "description": "Userscript 対応のコメント削除。文字列・正規表現・テンプレートリテラルを壊さず、// ==/UserScript== ヘッダーを保護します。",
+  "version": "0.1.3",
+  "engines": {
+    "vscode": "^1.108.1"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:extension.removeComments"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "extension.removeComments",
+        "title": "Remove Comments (Keep UserScript)"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imu31465/comment-remover.git",
+    "directory": "extension"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.108.1"
+  }
+}
