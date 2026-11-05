@@ -1205,7 +1205,9 @@
     var sum = 0;
     for (var i = 0; i < blocks.length; i++) {
       offs.push(sum);
-      blocks[i].h = blocks[i].el.offsetHeight;
+      /* offsetHeight は整数に丸められ、積み重なると選択位置がずれるため、
+         端数まで保持できる getBoundingClientRect().height で測る */
+      blocks[i].h = blocks[i].el.getBoundingClientRect().height;
       sum += blocks[i].h;
     }
     prune.offsets = offs;
